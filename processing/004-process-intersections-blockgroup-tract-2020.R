@@ -11,6 +11,9 @@ col_types_spec <- cols(
 file_path <- "/Users/amir/Downloads/Data/intersections/"
 files_2020 <- list.files(path = file_path, pattern = "2020", full.names = TRUE)
 
+files_2020 <- files_2020[!grepl("(ak|hi)", files_2020)]
+
+
 process_file <- function(file) {
   read_csv(file, col_types = col_types_spec) %>%
     select(precinct_unique_id, precinct_area, starts_with('bg_'), starts_with('G20'),
@@ -21,6 +24,11 @@ process_file <- function(file) {
 intersections <- files_2020 %>%
   map_dfr(process_file)
 
+#temp <- intersections %>% filter(bg_STATEFP=='39') %>% group_by(precinct_unique_id) %>% mutate(
+#  total_votes = rowSums(across(starts_with('G20PRE')), na.rm=T)
+#)
+#temp2 <- temp %>% group_by(precinct_unique_id) %>% summarise(votes = first(total_votes))
+#sum(temp2$votes)
 
 
 intersections2 <- intersections %>% mutate(
@@ -31,6 +39,8 @@ intersections2 <- intersections %>% mutate(
     as.character(precinct_unique_id)
   )
 )
+
+
 
 # ACS
 acs_tract <- read_csv( '/Users/amir/Downloads/Data/ACSCensusTract/ACSDP5Y2020.DP05-Data.csv' ) %>%
@@ -44,6 +54,20 @@ acs_tract <- read_csv( '/Users/amir/Downloads/Data/ACSCensusTract/ACSDP5Y2020.DP
     tract_population = as.numeric(tract_population)
   )
 
+acs_tract_hh <- read_csv( 'data/houshold-pop-tracts/ACSDT5Y2020.B11002-Data.csv' ) %>%
+  slice(-1) %>%
+  mutate(tract_GEOID = str_sub(GEO_ID, 10)) %>%
+  select(
+    tract_GEOID,
+    tract_hh_population = B11002_001E,
+  ) %>%
+  mutate(
+    tract_hh_population = as.numeric(tract_hh_population)
+  )
+
+acs_tract2 <- acs_tract %>% inner_join(acs_tract_hh, by="tract_GEOID")
+
+
 acs_bg <- read_csv( '/Users/amir/Downloads/Data/ACSBlockGroup/ACSDT5Y2020.B01003-Data.csv' ) %>%
   slice(-1) %>%
   mutate(year = 2020, bg_GEOID = str_sub(GEO_ID, 10)) %>%
@@ -55,11 +79,24 @@ acs_bg <- read_csv( '/Users/amir/Downloads/Data/ACSBlockGroup/ACSDT5Y2020.B01003
     bg_population = as.numeric(bg_population)
   )
 
+acs_bg_hh <- read_csv( 'data/household-pop/ACSDT5Y2020.B11002-Data.csv' ) %>%
+  slice(-1) %>%
+  mutate(bg_GEOID = str_sub(GEO_ID, 10)) %>%
+  select(
+    bg_GEOID,
+    bg_hh_population = B11002_001E,
+  ) %>%
+  mutate(
+    bg_hh_population = as.numeric(bg_hh_population)
+  )
 
-df <- intersections2 %>% inner_join(acs_tract, by = "tract_GEOID")
-df <- df %>% inner_join(acs_bg, by = "bg_GEOID")
+acs_bg2 <- acs_bg %>% inner_join(acs_bg_hh)
 
-remove(intersections, intersections2, acs_tract, acs_bg)
+
+df <- intersections2 %>% inner_join(acs_tract2, by = "tract_GEOID")
+df <- df %>% inner_join(acs_bg2, by = "bg_GEOID")
+
+remove(intersections, intersections2, acs_tract, acs_bg, acs_tract2, acs_bg2, acs_tract_hh, acs_bg_hh)
 
 #View(df %>% filter(is.na(tract_population)))
 
@@ -119,9 +156,9 @@ df_with_lc_estimates_relative_weights <- df_with_lc_estimates %>% group_by(bg_GE
   w2_r = ifelse(w2_total > 0, w2 / w2_total, w1_r),
   w3_r = ifelse(w3_total > 0, w3 / w3_total, w2_r),
   
-  pop1 = w1_r * bg_population,
-  pop2 = w2_r * bg_population,
-  pop3 = w3_r * bg_population,
+  pop1 = w1_r * bg_hh_population,
+  pop2 = w2_r * bg_hh_population,
+  pop3 = w3_r * bg_hh_population,
   
 ) %>% ungroup()
 
@@ -164,6 +201,7 @@ votes_bg_agg1 <- df_weight1_applied[
     .(bg_state_fp = first(bg_STATEFP),
       bg_county_fp = first(bg_COUNTYFP),
       bg_population = first(bg_population),
+      bg_hh_population = first(bg_hh_population),
       bg_land_area = first(bg_ALAND),
       bg_water_area = first(bg_AWATER),
       num_precincts_contributing = uniqueN(precinct_unique_id)),
@@ -175,7 +213,7 @@ votes_bg_agg1 <- df_weight1_applied[
 
 fwrite(
   votes_bg_agg1, 
-  file = "Produced Datasets/election-results-block-groups-2020-areal-method.csv", 
+  file = "REVISE/produced-data/election-results-block-groups-2020-areal-method.csv", 
   sep = ",",          # Use a comma as the separator
   quote = TRUE,       # Quote character strings to handle special characters
   bom = TRUE,         # Add BOM for compatibility with Excel
@@ -189,6 +227,7 @@ votes_tract_agg1 <- df_weight1_applied[
     .(tract_state_fp = first(bg_STATEFP),
       tract_county_fp = first(bg_COUNTYFP),
       tract_population = first(tract_population),
+      tract_hh_population = first(tract_hh_population),
       tract_land_area = first(tract_ALAND),
       tract_water_area = first(tract_AWATER),
       num_precincts_contributing = uniqueN(precinct_unique_id)),
@@ -200,7 +239,7 @@ votes_tract_agg1 <- df_weight1_applied[
 
 fwrite(
   votes_tract_agg1, 
-  file = "Produced Datasets/election-results-census-tracts-2020-areal-method.csv", 
+  file = "REVISE/produced-data/election-results-census-tracts-2020-areal-method.csv", 
   sep = ",",          # Use a comma as the separator
   quote = TRUE,       # Quote character strings to handle special characters
   bom = TRUE,         # Add BOM for compatibility with Excel
@@ -223,6 +262,7 @@ votes_bg_agg2 <- df_weight2_applied[
     .(bg_state_fp = first(bg_STATEFP),
       bg_county_fp = first(bg_COUNTYFP),
       bg_population = first(bg_population),
+      bg_hh_population = first(bg_hh_population),
       bg_land_area = first(bg_ALAND),
       bg_water_area = first(bg_AWATER),
       num_precincts_contributing = uniqueN(precinct_unique_id)),
@@ -234,7 +274,7 @@ votes_bg_agg2 <- df_weight2_applied[
 
 fwrite(
   votes_bg_agg2, 
-  file = "Produced Datasets/election-results-block-groups-2020-imperviousness-method.csv", 
+  file = "REVISE/produced-data/election-results-block-groups-2020-imperviousness-method.csv", 
   sep = ",",          # Use a comma as the separator
   quote = TRUE,       # Quote character strings to handle special characters
   bom = TRUE,         # Add BOM for compatibility with Excel
@@ -248,6 +288,7 @@ votes_tract_agg2 <- df_weight2_applied[
     .(tract_state_fp = first(bg_STATEFP),
       tract_county_fp = first(bg_COUNTYFP),
       tract_population = first(tract_population),
+      tract_hh_population = first(tract_hh_population),
       tract_land_area = first(tract_ALAND),
       tract_water_area = first(tract_AWATER),
       num_precincts_contributing = uniqueN(precinct_unique_id)),
@@ -259,7 +300,7 @@ votes_tract_agg2 <- df_weight2_applied[
 
 fwrite(
   votes_tract_agg2, 
-  file = "Produced Datasets/election-results-census-tracts-2020-imperviousness-method.csv", 
+  file = "REVISE/produced-data/election-results-census-tracts-2020-imperviousness-method.csv", 
   sep = ",",          # Use a comma as the separator
   quote = TRUE,       # Quote character strings to handle special characters
   bom = TRUE,         # Add BOM for compatibility with Excel
@@ -283,6 +324,7 @@ votes_bg_agg3 <- df_weight3_applied[
     .(bg_state_fp = first(bg_STATEFP),
       bg_county_fp = first(bg_COUNTYFP),
       bg_population = first(bg_population),
+      bg_hh_population = first(bg_hh_population),
       bg_land_area = first(bg_ALAND),
       bg_water_area = first(bg_AWATER),
       num_precincts_contributing = uniqueN(precinct_unique_id)),
@@ -294,7 +336,7 @@ votes_bg_agg3 <- df_weight3_applied[
 
 fwrite(
   votes_bg_agg3, 
-  file = "Produced Datasets/election-results-block-groups-2020-landcover-method.csv", 
+  file = "REVISE/produced-data/election-results-block-groups-2020-landcover-method.csv", 
   sep = ",",          # Use a comma as the separator
   quote = TRUE,       # Quote character strings to handle special characters
   bom = TRUE,         # Add BOM for compatibility with Excel
@@ -308,6 +350,7 @@ votes_tract_agg3 <- df_weight3_applied[
     .(tract_state_fp = first(bg_STATEFP),
       tract_county_fp = first(bg_COUNTYFP),
       tract_population = first(tract_population),
+      tract_hh_population = first(tract_hh_population),
       tract_land_area = first(tract_ALAND),
       tract_water_area = first(tract_AWATER),
       num_precincts_contributing = uniqueN(precinct_unique_id)),
@@ -319,7 +362,7 @@ votes_tract_agg3 <- df_weight3_applied[
 
 fwrite(
   votes_tract_agg3, 
-  file = "Produced Datasets/election-results-census-tracts-2020-landcover-method.csv", 
+  file = "REVISE/produced-data/election-results-census-tracts-2020-landcover-method.csv", 
   sep = ",",          # Use a comma as the separator
   quote = TRUE,       # Quote character strings to handle special characters
   bom = TRUE,         # Add BOM for compatibility with Excel
