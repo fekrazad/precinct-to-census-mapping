@@ -38,6 +38,27 @@ intersections2 <- intersections %>% rename(
   )
 )
 
+
+# 1) Compute main state per ZCTA
+main_state <- intersections2 %>%
+  group_by(zcta_GEOID, zg_STATEFP) %>%                   
+  summarise(land_in_state = sum(fraction_area), .groups="drop") %>%
+  group_by(zcta_GEOID) %>%
+  slice_max(order_by = land_in_state, n = 1, with_ties = FALSE) %>%
+  select(zcta_GEOID, zcta_state_fips = zg_STATEFP)
+
+# 2) Compute main county per ZCTA
+main_county <- intersections2 %>%
+  group_by(zcta_GEOID, zg_COUNTYFP) %>%
+  summarise(land_in_county = sum(fraction_area), .groups="drop") %>%
+  group_by(zcta_GEOID) %>%
+  slice_max(order_by = land_in_county, n = 1, with_ties = FALSE) %>%
+  select(zcta_GEOID, zcta_county_fips = zg_COUNTYFP)
+
+# 3) Join them together
+zcta_main_state_county <- main_state %>%
+  left_join(main_county, by = "zcta_GEOID")
+
 acs_zcta <- read_csv( '/Users/amir/Downloads/Data/ACS-ZCTA/ACSDP5Y2020.DP05-Data.csv' ) %>%
   slice(-1) %>%
   mutate(zcta_GEOID = str_sub(GEO_ID, 10)) %>%
@@ -50,20 +71,35 @@ acs_zcta <- read_csv( '/Users/amir/Downloads/Data/ACS-ZCTA/ACSDP5Y2020.DP05-Data
     zcta_population = as.numeric(zcta_population)
   )
 
-acs_bg <- read_csv( '/Users/amir/Downloads/Data/ACSBlockGroup/ACSDT5Y2020.B01003-Data.csv' ) %>%
+acs_zcta_hh <- read_csv( 'data/household-pop-zcta/ACSDT5Y2020.B11002-Data.csv' ) %>%
   slice(-1) %>%
-  mutate(year = 2020, bg_GEOID = str_sub(GEO_ID, 10)) %>%
+  mutate(zcta_GEOID = str_sub(GEO_ID, 10)) %>%
   select(
-    bg_GEOID,
-    bg_population = B01003_001E,
+    zcta_GEOID,
+    zcta_hh_population = B11002_001E,
   ) %>%
   mutate(
-    bg_population = as.numeric(bg_population)
+    zcta_GEOID = as.character(zcta_GEOID),
+    zcta_hh_population = as.numeric(zcta_hh_population)
+  )
+
+acs_zcta2 <- acs_zcta %>% inner_join(acs_zcta_hh)
+
+
+acs_bg_hh <- read_csv( 'data/household-pop/ACSDT5Y2020.B11002-Data.csv' ) %>%
+  slice(-1) %>%
+  mutate(bg_GEOID = str_sub(GEO_ID, 10)) %>%
+  select(
+    bg_GEOID,
+    bg_hh_population = B11002_001E,
+  ) %>%
+  mutate(
+    bg_hh_population = as.numeric(bg_hh_population)
   )
 
 
-df <- intersections2 %>% inner_join(acs_zcta, by = "zcta_GEOID")
-df <- df %>% inner_join(acs_bg, by = "bg_GEOID")
+df <- intersections2 %>% inner_join(zcta_main_state_county, by = "zcta_GEOID") %>% inner_join(acs_zcta2, by = "zcta_GEOID")
+df <- df %>% inner_join(acs_bg_hh, by = "bg_GEOID")
 
 remove(intersections, intersections2, acs_zcta)
 
@@ -105,9 +141,9 @@ df_with_lc_estimates_relative_weights <- df_with_lc_estimates %>% group_by(bg_GE
   w2_r = ifelse(w2_total > 0, w2 / w2_total, w1_r),
   w3_r = ifelse(w3_total > 0, w3 / w3_total, w2_r),
   
-  pop1 = w1_r * bg_population,
-  pop2 = w2_r * bg_population,
-  pop3 = w3_r * bg_population,
+  pop1 = w1_r * bg_hh_population,
+  pop2 = w2_r * bg_hh_population,
+  pop3 = w3_r * bg_hh_population,
   
 ) %>% ungroup()
 
@@ -148,7 +184,10 @@ setDT(df_weight1_applied)
 votes_zcta_agg1 <- df_weight1_applied[
   , c(
     .(
+      zcta_state_fp = first(zcta_state_fips),
+      zcta_county_fp = first(zcta_county_fips),
       zcta_population = first(zcta_population),
+      zcta_hh_population = first(zcta_hh_population),
       zcta_land_area = first(zcta_ALAND),
       zcta_water_area = first(zcta_AWATER),
       num_precincts_contributing = uniqueN(precinct_unique_id)),
@@ -160,7 +199,7 @@ votes_zcta_agg1 <- df_weight1_applied[
 
 fwrite(
   votes_zcta_agg1, 
-  file = "Produced Datasets/election-results-zcta-2020-areal-method.csv", 
+  file = "REVISE/produced-data/election-results-zcta-2020-areal-method.csv", 
   sep = ",",          # Use a comma as the separator
   quote = TRUE,       # Quote character strings to handle special characters
   bom = TRUE,         # Add BOM for compatibility with Excel
@@ -178,7 +217,10 @@ setDT(df_weight2_applied)
 votes_zcta_agg2 <- df_weight2_applied[
   , c(
     .(
+      zcta_state_fp = first(zcta_state_fips),
+      zcta_county_fp = first(zcta_county_fips),
       zcta_population = first(zcta_population),
+      zcta_hh_population = first(zcta_hh_population),
       zcta_land_area = first(zcta_ALAND),
       zcta_water_area = first(zcta_AWATER),
       num_precincts_contributing = uniqueN(precinct_unique_id)),
@@ -190,7 +232,7 @@ votes_zcta_agg2 <- df_weight2_applied[
 
 fwrite(
   votes_zcta_agg2, 
-  file = "Produced Datasets/election-results-zcta-2020-imperviousness-method.csv", 
+  file = "REVISE/produced-data/election-results-zcta-2020-imperviousness-method.csv", 
   sep = ",",          # Use a comma as the separator
   quote = TRUE,       # Quote character strings to handle special characters
   bom = TRUE,         # Add BOM for compatibility with Excel
@@ -207,7 +249,10 @@ setDT(df_weight3_applied)
 votes_zcta_agg3 <- df_weight3_applied[
   , c(
     .(
+      zcta_state_fp = first(zcta_state_fips),
+      zcta_county_fp = first(zcta_county_fips),
       zcta_population = first(zcta_population),
+      zcta_hh_population = first(zcta_hh_population),
       zcta_land_area = first(zcta_ALAND),
       zcta_water_area = first(zcta_AWATER),
       num_precincts_contributing = uniqueN(precinct_unique_id)),
@@ -219,9 +264,11 @@ votes_zcta_agg3 <- df_weight3_applied[
 
 fwrite(
   votes_zcta_agg3, 
-  file = "Produced Datasets/election-results-zcta-2020-landcover-method.csv", 
+  file = "REVISE/produced-data/election-results-zcta-2020-landcover-method.csv", 
   sep = ",",          # Use a comma as the separator
   quote = TRUE,       # Quote character strings to handle special characters
   bom = TRUE,         # Add BOM for compatibility with Excel
   encoding = "UTF-8"  # Ensure UTF-8 encoding
 )
+
+
